@@ -1,4 +1,4 @@
-
+![image](https://github.com/user-attachments/assets/1f15b6f7-b746-4057-8d21-5159e9b52b87)
 ## Details
 
 ## Target
@@ -1224,5 +1224,238 @@ However, according to Ghidra there are 510 external references to the `util_exec
 
 There is a possiblity that there is an instance where the `util_execSystem` function is called without the first escaping the input with the validtion function. Therefore, the usage of the validation function should be verified for all the instances.
 
+## Extracting config partition
+
+After applying SSID and PSK we can see the following config entries:
+
+```
+spiflash_ioctl_erase, erase to 0x003f0000 length 0x0, nerase done
+spiflash_ioctl_write, Write to 0x003e0000 length 0x10000, ret 0, retlen 0x10000
+```
+This indicates that the config is at that location
+
+Boot partitions:
+
+```
+EN25QX64A(1c 71171c71) (8192 Kbytes)
+mtd .name = raspi, .size = 0x00800000 (8M) .erasesize = 0x00010000 (64K) .numeraseregions = 0
+Creating 5 MTD partitions on "raspi":
+0x000000000000-0x000000010000 : "boot"
+0x000000010000-0x000000100000 : "kernel"
+0x000000100000-0x0000003e0000 : "rootfs"
+mtd: partition "rootfs" set to be root filesystem
+0x0000003e0000-0x0000003f0000 : "config"
+0x0000003f0000-0x000000400000 : "radio"
+```
+
+Extracting config partitino using dd
+
+![image](https://github.com/user-attachments/assets/0a643957-da45-4a29-816f-e9d7e099bce2)
+
+Running backup and restore to possibly trigger decryption of the config partition
+
+![image](https://github.com/user-attachments/assets/579aee42-03b9-4780-b411-969ecb6fa7d7)
+
+
+Nothing notable output from UART
+
+Running a corrupted config file to try and trigger a error message
+
+![image](https://github.com/user-attachments/assets/50365122-de58-4678-8a80-4126144e9381)
+
+```
+[ rsl_sys_restoreCfg ] 2167:  Config file MD5 check fail
+
+[ rdp_restoreCfg ] 342:  perror:4501
+```
+
+The rsl_sys_restoreCfg fucntion can be found in the libcmm.so file
+
+```
+undefined4 rsl_sys_restoreCfg(void *param_1,int param_2)
+
+{
+  bool bVar1;
+  int iVar2;
+  uint uVar3;
+  int iVar4;
+  uint __n;
+  int *piVar5;
+  undefined4 uVar6;
+  int *piVar7;
+  char *pcVar8;
+  int iVar9;
+  void *pvVar10;
+  undefined4 uVar11;
+  uint uVar12;
+  
+  iVar2 = cmem_getSharedBuffSize();
+  pvVar10 = (void *)((int)param_1 + param_2);
+  memset(pvVar10,0,iVar2 - param_2);
+  uVar3 = cen_desMinDo(param_1,param_2,pvVar10,iVar2 - param_2,&DAT_000f01f8,0);
+  if (uVar3 == 0) {
+    uVar6 = 0x852;
+    pcVar8 = "DES decrypt error\n";
+LAB_0002c8fc:
+    uVar11 = 1;
+    cdbg_printf(8,"rsl_sys_restoreCfg",uVar6,pcVar8);
+  }
+  else {
+    if (uVar3 < 0x11) {
+      cdbg_printf(8,"rsl_sys_restoreCfg",0x866,"File size %d is too small\n",uVar3);
+    }
+    else {
+      uVar3 = uVar3 - 0x10;
+      uVar12 = iVar2 - 0x41830;
+      if (uVar12 < uVar3) {
+        uVar6 = 0x870;
+LAB_0002ca04:
+        cdbg_printf(8,"rsl_sys_restoreCfg",uVar6,
+                    "Compress data is too long, available size is %d bytes, now is %d bytes",uVar12,
+                    uVar3);
+        return 0x1194;
+      }
+      iVar4 = cen_md5VerifyDigest(pvVar10,(void *)((int)pvVar10 + 0x10),uVar3);
+      if (iVar4 == 0) {
+        uVar6 = 0x877;
+        pcVar8 = "Config file MD5 check fail\n";
+      }
+      else {
+        memcpy(param_1,(void *)((int)pvVar10 + 0x10),uVar3);
+        pvVar10 = (void *)((int)param_1 + uVar3);
+        memset(pvVar10,0,iVar2 - uVar3);
+        __n = cen_uncompressBuff(param_1,pvVar10,iVar2 - uVar3);
+        if (__n != 0) {
+          iVar4 = dm_restoreCfg(pvVar10,__n,1);
+          if (iVar4 == 0) {
+            dm_cleanupCfg(8);
+            iVar4 = dm_restoreCfg(pvVar10,__n,0);
+            if (iVar4 == 0) {
+              if (__n < 0xfff1) {
+                memset(param_1,0,uVar3);
+                *(uint *)((int)pvVar10 + -0x10) = __n;
+                *(undefined4 *)((int)pvVar10 + -0xc) = 0x98765432;
+                *(undefined4 *)((int)pvVar10 + -4) = 0;
+                *(undefined4 *)((int)pvVar10 + -8) = 0;
+                *(undefined *)((int)pvVar10 + __n) = 0;
+LAB_0002ca98:
+                piVar5 = (int *)((int)pvVar10 + -0x10);
+                iVar4 = 0;
+                uVar3 = 0;
+                piVar7 = piVar5;
+                while (bVar1 = uVar3 != *piVar5 + 0x10U >> 2, uVar3 = uVar3 + 1, bVar1) {
+                  iVar9 = *piVar7;
+                  piVar7 = piVar7 + 1;
+                  iVar4 = iVar4 + iVar9;
+                }
+                *(int *)((int)pvVar10 + -8) = -iVar4;
+                iVar2 = oal_sys_writeCfgFlash(piVar5,*piVar5 + 0x10U,iVar2);
+                if (iVar2 == 0) {
+                  return 0;
+                }
+                cdbg_printf(8,"rsl_sys_restoreCfg",0x925,"Write user config to flash error.");
+                return 0;
+              }
+              memcpy(param_1,pvVar10,__n);
+              pvVar10 = (void *)((int)param_1 + __n);
+              memset(pvVar10,0,iVar2 - __n);
+              uVar3 = cen_compressBuff(param_1,__n,(int)param_1 + iVar2 + -0x8000,pvVar10);
+              if (uVar3 != 0) {
+                if (uVar12 < uVar3) {
+                  uVar6 = 0x8f1;
+                  goto LAB_0002ca04;
+                }
+                memset(param_1,0,__n);
+                *(undefined4 *)((int)pvVar10 + -0xc) = 0x98765432;
+                *(uint *)((int)pvVar10 + -0x10) = uVar3;
+                *(undefined4 *)((int)pvVar10 + -4) = 1;
+                *(undefined4 *)((int)pvVar10 + -8) = 0;
+                *(undefined *)((int)pvVar10 + uVar3) = 0;
+                goto LAB_0002ca98;
+              }
+              uVar6 = 0x8e9;
+              pcVar8 = "compress data error!";
+              goto LAB_0002c8fc;
+            }
+            uVar6 = 0x8c8;
+          }
+          else {
+            uVar6 = 0x8bf;
+          }
+          pcVar8 = "Set config into DM error\n";
+          goto LAB_0002c8fc;
+        }
+        uVar6 = 0x896;
+        pcVar8 = "uncompress data error!\n";
+      }
+      cdbg_printf(8,"rsl_sys_restoreCfg",uVar6,pcVar8);
+    }
+    uVar11 = 0x1195;
+  }
+  return uVar11;
+}
+```
+
+Here the oal_sys_writeCfgFlash function is used to do the encryption.
+
+
+```
+
+undefined4 oal_sys_writeCfgFlash(int *param_1,int param_2)
+
+{
+  int iVar1;
+  undefined4 uVar2;
+  uint uVar3;
+  int local_60;
+  undefined auStack_5c [36];
+  undefined auStack_38 [44];
+  
+  local_60 = 0;
+  memset(auStack_38,0,0x21);
+  memset(auStack_5c,0,0x21);
+  memcpy(auStack_38,gKey,0x20);
+  memcpy(auStack_5c,gIv,0x20);
+  local_60 = param_2 + -0x10;
+  iVar1 = aes_cbc_encrypt_intface_bypart(param_1 + 4,&local_60,auStack_38,auStack_5c);
+  if (iVar1 < 0) {
+    cdbg_printf(8,"oal_sys_writeCfgFlash",0x707,"Encrypt flash error %d",iVar1);
+  }
+  param_1[3] = param_1[3] + 2;
+  *param_1 = local_60;
+  uVar3 = local_60 + 0x10;
+  if (uVar3 < 0x10001) {
+    iVar1 = FUN_000983c0(0x3e0000,uVar3,param_1);
+    uVar2 = 0;
+    if (iVar1 < 0) {
+      cdbg_printf(8,"oal_sys_writeCfgFlash",0x717,"Write config error\n");
+      uVar2 = 0x232a;
+    }
+  }
+  else {
+    cdbg_printf(8,"oal_sys_writeCfgFlash",0x711,"Config file length too long - %d\n",uVar3);
+    uVar2 = 0x1194;
+  }
+  return uVar2;
+}
+
+```
+
+aes cvc encryption is used and the gKey and gIV are saved in memory
+
+![image](https://github.com/user-attachments/assets/bb16c516-18dd-423d-8538-13a4f389eb63)
+
+IV = 1528632946736539
+Key = 1528632946736109
+
+Decrypt using CyberChef
+
+Convert binary to hex that can be copied
+
+![image](https://github.com/user-attachments/assets/42a024a8-6573-4f30-a589-86753714640b)
+
+AES decrypt
+
+![image](https://github.com/user-attachments/assets/912792ca-10ef-46fe-b3ec-1eda88729872)
 
 
