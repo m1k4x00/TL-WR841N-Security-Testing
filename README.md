@@ -1,4 +1,4 @@
-![image](https://github.com/user-attachments/assets/1f15b6f7-b746-4057-8d21-5159e9b52b87)
+
 ## Details
 
 ## Target
