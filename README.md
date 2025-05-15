@@ -4,7 +4,9 @@
 ## Target
 Manufacturer: TP-Link
 
-Part Number: TL-WR841N
+Part Number: TL-WR841N(EU)
+
+Firmware version: 14.0
 
 Serial Number: 22487Q7006381
 
@@ -755,6 +757,47 @@ The German (TPD) version gives a shell after removing the resistor
 On the other hand, TP-Link TL-WR840N(EU) seem to spawn a shell.
 [https://martinhogberg.se/gaining-a-uart-root-shell-on-the-tp-link-tl-wr840n/](https://martinhogberg.se/gaining-a-uart-root-shell-on-the-tp-link-tl-wr840n/)
 
+## Generating additional log messages
+
+By setting up the router as an access point with a password (Quick setup --> Access Point) the following log messages are promted
+
+```
+[ util_execSystem ] 185:  oal_wlan_ra_setWlanAdvCfg cmd is "iwpriv ra0 set DtimPeriod=1"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setWlanAdvCfg cmd is "iwpriv ra0 set HtGi=1"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setWlanAdvCfg cmd is "iwpriv ra0 set HideSSID=0"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setWlanAdvCfg cmd is "iwpriv ra0 set WmmCapable=1"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setWlanAdvCfg cmd is "iwpriv ra0 set NoForwarding=0"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setSec cmd is "iwpriv ra0 set AuthMode=WPA2PSK"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setSec cmd is "iwpriv ra0 set EncrypType=AES"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setSec cmd is "iwpriv ra0 set IEEE8021X=0"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setSec cmd is "iwpriv ra0 set DefaultKeyID=2"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setSec cmd is "iwpriv ra0 set SSID='T''P''-''L''i''n''k''_''A''A''1''4'"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setSec cmd is "iwpriv ra0 set RekeyInterval=0"
+
+[ util_execSystem ] 185:  oal_wlan_ra_setSec cmd is "iwpriv ra0 set WPAPSK='P''a''s''s''w''o''r''d''1''2''3'"
+
+[ util_execSystem ] 185:  oal_wlan_ra_updateWlanCfg cmd is "iwpriv ra0 set AccessPolicy=0"
+
+[ util_execSystem ] 185:  oal_wlan_ra_updateWlanCfg cmd is "iwpriv ra0 set SSID='T''P''-''L''i''n''k''_''A''A''1''4'"
+
+[ util_execSystem ] 185:  oal_wlan_ra_updateWlanCfg cmd is "ifconfig ra1 down"
+
+[ util_execSystem ] 185:  oal_wlan_ra_updateWlanCfg cmd is "ifconfig ra0 down; "
+```
+
+A function called `util_execSystem` is executed repeatedly and seems to allow system coommands to be run. 
+
+It seems that the user-supplied input is validated by escaping each charected individually with quotes.
 
 ### Interesting findings
 
@@ -816,19 +859,370 @@ MT7628 #
 
 However, the shell is limited and the only command available is `tftpboot`
 
-#Firmware Extraction
+# Firmware Extraction
 
-##Extraction from ROM
+## Extraction from ROM
 
 The datasheet of the EN25Q32B-104HIP chip specifies that SPI is used to communicate with the processor. This was confirmed using a logic analyzer.
 
 ![image](https://github.com/user-attachments/assets/519cac38-65d8-4de0-a34d-d53e49cc8c3d)
 
+The firmware was extracted using Rasberry pi's SPI pins with the following command
+
+`sudo flashrom -r TP_LINK.img -p linux_spi:dev=/dev/spidev0.0,spispeed=8000`
+
+![image](https://github.com/user-attachments/assets/ab92f69e-efd3-4bec-80a0-0cf66b46a28b)
+
+## Firmware Analysis
+
+Running binwalk on the firmware extraction showed three partitions, matching the ones found previously.
+
+![image](https://github.com/user-attachments/assets/24bb0acc-8b2e-4215-a70f-9df5139b62ac)
 
 
+Using binwalk to extract the partitions
+
+![image](https://github.com/user-attachments/assets/23a9ec70-a105-48af-a55a-b7530332b9ed)
+
+Binwalk was not able to automatically extract the U-boot partition
+
+Extracting manually using dd
+
+![image](https://github.com/user-attachments/assets/f5b160f3-f8d5-4cb8-98ee-03f98adb224e)
+
+Looking through the filesystem two encrypted xml files can be found
+
+![image](https://github.com/user-attachments/assets/9b04467d-64f2-47f8-92b5-6143e2b55acf)
+
+Encrypted files imply that there is a decrypt function in the firmare
+
+Both the XML files are referenced in libcmm.o located in the lib folder
+
+![image](https://github.com/user-attachments/assets/d9d2474b-eb4f-4215-a0d5-ee65628931cf)
+
+## Decryption Function
+
+Using Ghidra a decryptFile function was located in licmm.so library file
+
+```
+int dm_decryptFile(uint param_1,undefined4 param_2,uint param_3,int param_4)
+{
+  int iVar1;
+  undefined auStack_28 [8];
+  int local_20;
+  
+  memcpy(auStack_28,&DAT_000c9f90,8);
+  if (param_3 < param_1) {
+    cdbg_printf(8,"dm_decryptFile",0xbcf,
+                "Buffer exceeded, decrypt buf size is %u, but dm file size is %u",param_3,param_1);
+    local_20 = 0;
+  }
+  else {
+    local_20 = cen_desMinDo(param_2,param_1,param_4,param_3,auStack_28,0);
+    iVar1 = local_20;
+    if (local_20 == 0) {
+      cdbg_printf(8,"dm_decryptFile",0xbd6,"DES decrypt error\n");
+    }
+    else {
+      do {
+        local_20 = iVar1;
+        if (((undefined *)(param_4 + local_20))[-1] != '\0') break;
+        iVar1 = local_20 + -1;
+      } while (local_20 != 0);[ util_execSystem ] 185:  prepareDropbear cmd is "dropbearkey -t rsa -f /var/tmp/dropbear/dropbear_rsa_host_key"
+      *(undefined *)(param_4 + local_20) = 0;
+    }
+  }
+  return local_20;
+}
+```
+Based on the print function it seems DES encryption is used. DES uses 8x8 bytes keys and there appears to be a buffer auStack_28[8] which mathces the size.
+
+The function copies contents from the pointer &DAT_000c9f90. 
+
+![image](https://github.com/user-attachments/assets/7634542d-c049-45d7-8865-175883523176)
+
+DES Encryption Key: 478da50ff9e3d2cb   
+
+Decrypt using openssl
+
+`openssl enc -d -des-ecb -K 478DA50FF9E3D2CB -nopad -in default_config.xml > default_config_dec.xml `
+
+However, there were no notable findings in the decrypted xml files
+
+`openssl enc -d -des-ecb -K 478DA50FF9E3D2CB -nopad -in reduced_data_model.xml > reduzed_data_model_dec.xml`
+
+## Checking for Possible Command Injection
+
+With Ghidra the following decompiled source code for the `util_execSystem` function can be found:
+
+```
+int util_execSystem(int param_1,char *param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  char *pcVar1;
+  __pid_t _Var2;
+  uint uVar3;
+  undefined4 uVar4;
+  int iVar5;
+  int iVar6;
+  undefined4 local_res8;
+  undefined4 local_resc;
+  char *__s;
+  uint local_234;
+  char acStack_230 [512];
+  int local_30;
+  
+  __s = acStack_230;
+  local_234 = 0;
+  local_res8 = param_3;
+  local_resc = param_4;
+  memset(__s,0,0x200);
+  local_30 = vsnprintf(__s,0x1ff,param_2,&local_res8);
+  cdbg_printf(8,"util_execSystem",0xb9,"%s cmd is \"%s\"\n",param_1,__s);
+  iVar5 = 1;
+  if (0 < local_30) {
+    while( true ) {
+      local_234 = system(acStack_230);
+      uVar3 = local_234 & 0x7f;
+      if ((int)local_234 < 0) {
+        if (local_234 == 0xffffffff) {
+          cdbg_printf(8,"util_execSystem",0xcd,"system fork failed.",param_1,__s);
+        }
+        else {
+          perror("util_execSystem call error:");
+        }
+      }
+      else if (uVar3 == 0) {
+        iVar6 = (int)(local_234 & 0xff00) >> 8;
+        if (iVar6 == 0) {
+          return 0;
+        }
+        if (iVar6 != 4) {
+          return iVar6;
+        }
+        pcVar1 = strstr(acStack_230,"iptable");
+        if (pcVar1 == (char *)0x0) {
+          return 4;
+        }
+        sleep(1);
+      }
+      else {
+        if ((int)((uVar3 + 1) * 0x1000000) >> 0x19 < 1) {
+          if ((local_234 & 0xff) == 0x7f) {
+            uVar4 = 0xe6;
+            pcVar1 = "process stopped, signal number = %d\n";
+            uVar3 = (int)(local_234 & 0xff00) >> 8;
+          }
+          else {
+            uVar4 = 0xe8;
+            pcVar1 = "Oh,no possible here. status = %d\n";
+            uVar3 = local_234;
+          }
+        }
+        else {
+          uVar4 = 0xe4;
+          pcVar1 = "abnormal termination, signal number = %d\n";
+        }
+        cdbg_printf(8,"util_execSystem",uVar4,pcVar1,uVar3,__s);
+        while (_Var2 = waitpid(-1,(int *)&local_234,1), 0 < _Var2) {
+          cdbg_printf(8,"util_execSystem",0xee,"get a zombie process %d",_Var2);
+        }
+      }
+      if (iVar5 == 3) break;
+      param_1 = iVar5;
+      cdbg_printf(8,"util_execSystem",199,"system execute again, and %d times",iVar5);
+      iVar5 = iVar5 + 1;
+    }
+  }
+  return -1;
+}
+
+```
+
+By looking at the code it can be noted that the function executes systemcalls based on the parameter2 argument. The util_execSystem itself does not validate the input. The only formatting done is by the vsnprint function which creates the command string. This means that the validation of user input is done by functions calling the util_execSystem function.
+
+User input is validated by escaping strings given by the user. This is done to prevent possible command injections from happening. For example, an user might input a semicolon (;) and execute additonal commands. Now this is does not work since quotes are added to each character.
+
+The string "iwpriv %s set SSID=%s" can be found in the same libcmm.so file 
+
+![image](https://github.com/user-attachments/assets/81841a70-5010-4d42-b602-8fdb6b2de739)
+
+The validation function can be found from the references
+
+```
+
+/* WARNING: Switch with 1 destination removed at 0x000aa304 */
+/* WARNING: Switch with 1 destination removed at 0x000aa3d4 */
+/* WARNING: Exceeded maximum restarts with more pending */
+
+int FUN_000aa208(int param_1,undefined4 param_2,char *param_3,int param_4,undefined4 param_5)
+
+{
+  int iVar1;
+  undefined4 uVar2;
+  char *pcVar3;
+  int local_1c0;
+  int local_1bc;
+  char acStack_1b8 [12];
+  char acStack_1ac [20];
+  undefined auStack_198 [32];
+  undefined auStack_178 [32];
+  undefined auStack_158 [100];
+  undefined auStack_f4 [196];
+  char *local_30;
+  
+  local_1bc = 1;
+  local_1c0 = 1;
+  cstr_strncpy(auStack_178,&DAT_000c1e5c,0xc);
+  cstr_strncpy(auStack_198,&DAT_000c3040,4);
+  iVar1 = oal_wlan_getSecMode(param_1,&local_1bc,&local_1c0);
+  if (iVar1 == 0) {
+    if (local_1bc - 1U < 0xb) {
+                    /* WARNING: Could not find normalized switch variable to match jumptable */
+                    /* WARNING: This code block may not be properly labeled as switch case */
+      strcpy(acStack_1ac,"OPEN");
+    }
+    uVar2 = 2;
+    if (local_1c0 - 1U < 5) {
+                    /* WARNING: Could not find normalized switch variable to match jumptable */
+                    /* WARNING: This code block may not be properly labeled as switch case */
+      uVar2 = 2;
+      strcpy(acStack_1b8,"NONE");
+    }
+    else if (local_1c0 == 2) {
+      uVar2 = *(undefined4 *)(param_1 + 0x17c);
+    }
+    iVar1 = strcmp("Up",param_3);
+    if (iVar1 != 0) {
+      return 0;
+    }
+    util_execSystem("oal_wlan_ra_setSec","iwpriv %s set AuthMode=%s",param_2,acStack_1ac);
+    util_execSystem("oal_wlan_ra_setSec","iwpriv %s set EncrypType=%s",param_2,acStack_1b8);
+    util_execSystem("oal_wlan_ra_setSec","iwpriv %s set IEEE8021X=0",param_2);
+    if (local_1c0 == 2) {
+      if (*(char *)(param_1 + 0x180) != '\0') {
+        FUN_000aa15c(auStack_f4,param_1 + 0x180);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set Key1=%s",param_2,auStack_f4);
+      }
+      if (*(char *)(param_1 + 0x210) != '\0') {
+        FUN_000aa15c(auStack_f4,param_1 + 0x210);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set Key2=%s",param_2,auStack_f4);
+      }
+      if (*(char *)(param_1 + 0x2a0) != '\0') {
+        FUN_000aa15c(auStack_f4,param_1 + 0x2a0);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set Key3=%s",param_2,auStack_f4);
+      }
+      if (*(char *)(param_1 + 0x330) != '\0') {
+        FUN_000aa15c(auStack_f4,param_1 + 0x330);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set Key4=%s",param_2,auStack_f4);
+      }
+    }
+    util_execSystem("oal_wlan_ra_setSec","iwpriv %s set DefaultKeyID=%d",param_2,uVar2);
+    if (local_1c0 - 1U < 2) {
+      return 0;
+    }
+    FUN_000aa15c(auStack_158,param_5);
+    util_execSystem("oal_wlan_ra_setSec","iwpriv %s set SSID=%s",param_2,auStack_158);
+    util_execSystem("oal_wlan_ra_setSec","iwpriv %s set RekeyInterval=%d",param_2,
+                    *(undefined4 *)(param_1 + 0xf0));
+    if ((((local_1bc - 6U < 2) || (local_1bc == 9)) || (local_1bc == 10)) || (local_1bc == 0xb)) {
+      FUN_000aa15c(auStack_f4,param_1 + 0xae);
+      util_execSystem("oal_wlan_ra_setSec","iwpriv %s set WPAPSK=%s",param_2,auStack_f4);
+      return 0;
+    }
+    iVar1 = oal_wlan_getBrNamebyIfName(param_4,param_4,auStack_198);
+    if (iVar1 == 0) {
+      iVar1 = oal_wlan_getIfAddr(auStack_198,auStack_178);
+      if (iVar1 == 0) {
+        local_30 = "PppConn_RemoveSubObj";
+        iVar1 = strcmp("2.4GHz",(char *)(param_4 + 1099));
+        if (iVar1 == 0) {
+          pcVar3 = "killall -q  -SIGINT rt2860apd";
+        }
+        else {
+          pcVar3 = "killall -q  -SIGINT rtinicapd";
+        }
+        util_execSystem("oal_wlan_ra_setSec",pcVar3);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set IEEE8021X=0",param_2);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set SSID=%s",param_2,auStack_158);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set RADIUS_Server=%s",param_2,param_1 + 0xf4
+                       );
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set RADIUS_Port=%d",param_2,
+                        *(undefined4 *)(param_1 + 0x134));
+        FUN_000aa15c(auStack_f4,param_1 + 0x138);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set RADIUS_Key=%s",param_2,auStack_f4);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set EAPifname=%s",param_2,auStack_198);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set own_ip_addr=%s",param_2,auStack_178);
+        util_execSystem("oal_wlan_ra_setSec","iwpriv %s set SSID=%s",param_2,auStack_158);
+        sleep(4);
+        iVar1 = strcmp("2.4GHz",(char *)(param_4 + 1099));
+        if (iVar1 == 0) {
+          pcVar3 = "rt2860apd &";
+        }
+        else {
+          pcVar3 = "rtinicapd &";
+        }
+        util_execSystem("oal_wlan_ra_setSec",pcVar3);
+        return 0;
+      }
+      uVar2 = 0xbce;
+    }
+    else {
+      uVar2 = 0xbc9;
+    }
+  }
+  else {
+    uVar2 = 0xb2c;
+  }
+  cdbg_perror("oal_wlan_ra_setSec",uVar2,iVar1);
+  return iVar1;
+}
 
 
+```
 
+The input (param_5) is validated by the `FUN_000aa15c(auStack_158,param_5);` call before being passed on to the util_execSystem function.
+
+
+```
+void FUN_000aa15c(int param_1,char *param_2)
+
+{
+  char cVar1;
+  size_t sVar2;
+  undefined *puVar3;
+  int iVar4;
+  int iVar5;
+  
+  sVar2 = strlen(param_2);
+  iVar4 = 0;
+  for (iVar5 = 0; puVar3 = (undefined *)(param_1 + iVar4), iVar5 < (int)sVar2; iVar5 = iVar5 + 1) {
+    if (*param_2 == '\'') {
+      *puVar3 = 0x5c;
+      iVar4 = iVar4 + 2;
+      puVar3[1] = *param_2;
+    }
+    else {
+      *puVar3 = 0x27;
+      cVar1 = *param_2;
+      iVar4 = iVar4 + 3;
+      puVar3[2] = 0x27;
+      puVar3[1] = cVar1;
+    }
+    param_2 = param_2 + 1;
+  }
+  *puVar3 = 0;
+  return;
+}
+```
+
+The escaping appears to be properly implemented and functions as intended.
+
+However, according to Ghidra there are 510 external references to the `util_execSystem` function.
+
+![image](https://github.com/user-attachments/assets/2526086f-b547-413d-9a06-220ba150d506)
+
+There is a possiblity that there is an instance where the `util_execSystem` function is called without the first escaping the input with the validtion function. Therefore, the usage of the validation function should be verified for all the instances.
 
 
 
